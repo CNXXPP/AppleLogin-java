@@ -7,18 +7,22 @@ import java.security.PublicKey;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.RSAPublicKeySpec;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhaouri.applelogin.model.AppleKeys;
 import com.zhaouri.applelogin.model.HttpResult;
 import com.zhaouri.applelogin.model.Keys;
 import com.zhaouri.applelogin.utils.HttpClientUtil;
 
-import org.springframework.web.bind.annotation.*;
 import org.apache.commons.codec.binary.Base64;
+import org.springframework.web.bind.annotation.*;
 
 import io.jsonwebtoken.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang.StringUtils;
+
+import static org.apache.commons.codec.binary.Base64.*;
 
 /**
  * HomeController
@@ -76,14 +80,27 @@ public class HomeController {
         String n = "";
         String ee = "";
 
-        if (appleKeys.getKeys().size() > 0) {
-            // 获得jsonArray的第一个元素
-            final Keys keys = appleKeys.getKeys().get(0);
+         String kid = decodeHeader(sub, jwt);
 
-            n = keys.getN();
-            ee = keys.getE();
 
-            log.info("[苹果登录日志]jwt:{},aud:{},sub:{}", jwt, aud, sub);
+//        if (appleKeys.getKeys().size() > 0) {
+//            // 获得jsonArray的第一个元素
+//            final Keys keys = appleKeys.getKeys().get(0);
+//
+//            n = keys.getN();
+//            ee = keys.getE();
+//
+//            log.info("[苹果登录日志]jwt:{},aud:{},sub:{}", jwt, aud, sub);
+//        }
+
+        for (Keys key : appleKeys.getKeys()) {
+            if (StringUtils.equals(key.getKid(), kid)) {
+                // 注意获得kid匹配的key
+                n = key.getN();
+                ee = key.getE();
+                log.info(String.format("[苹果登录日志]jwt:%s,aud:%s,sub:%s", jwt, aud, sub));
+                break;
+            }
         }
 
         try {
@@ -113,9 +130,26 @@ public class HomeController {
     }
 
     public RSAPublicKeySpec build(final String n, final String e) {
-        final BigInteger modulus = new BigInteger(1, Base64.decodeBase64(n));
-        final BigInteger publicExponent = new BigInteger(1, Base64.decodeBase64(e));
+        final BigInteger modulus = new BigInteger(1, decodeBase64(n));
+        final BigInteger publicExponent = new BigInteger(1, decodeBase64(e));
         return new RSAPublicKeySpec(modulus, publicExponent);
+    }
+
+    private static String decodeHeader(String appleUserId, String identityToken) {
+        JwsHeader jwsHeader = null;
+        try {
+            String[] arrToken = identityToken.split("\\.");
+            if (arrToken == null || arrToken.length != 3) {
+                return null;
+            }
+
+            String text = new String(decodeBase64(arrToken[0]), "utf-8");
+            JSONObject jsonObject = JSON.parseObject(text);
+            return jsonObject.get("kid").toString();
+        } catch (Throwable t) {
+            log.warn(String.format("[decodeHeader]verify apple user[%s] identity token failed. reason: %s.", appleUserId, t.getMessage()));
+        }
+        return "";
     }
 
     public int verify(final PublicKey key, final String jwt, final String audience, final String subject) {
@@ -139,6 +173,7 @@ public class HomeController {
             log.error("apple identityToken expired");
             return -1;
         } catch (final Exception e) {
+            log.error(e.getMessage());
             log.error("apple identityToken illegal");
             return -2;
         }
@@ -159,8 +194,8 @@ public class HomeController {
             // BigInteger N = new BigInteger(stringN, 16); // hex base
             // BigInteger E = new BigInteger(stringE, 16); // hex base
 
-            final BigInteger modulus = new BigInteger(1, Base64.decodeBase64(stringN));
-            final BigInteger publicExponent = new BigInteger(1, Base64.decodeBase64(stringE));
+            final BigInteger modulus = new BigInteger(1, decodeBase64(stringN));
+            final BigInteger publicExponent = new BigInteger(1, decodeBase64(stringE));
 
             final RSAPublicKeySpec spec = new RSAPublicKeySpec(modulus, publicExponent);
             final KeyFactory kf = KeyFactory.getInstance("RSA");
